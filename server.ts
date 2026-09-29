@@ -1,5 +1,5 @@
 ﻿import { GoogleGenAI } from '@google/genai';
-import express from 'express';
+import express, { Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 
@@ -48,7 +48,7 @@ function obtenerMensajesDelBuzon(dir: string): CarpetaMensaje[] {
 }
 
 // Endpoint para procesar el buzón de forma autónoma desde la web
-app.post('/api/procesar', async (req, res) => {
+app.post('/api/procesar', async (req: Request, res: Response) => {
   if (!fs.existsSync(OUT_DIR)) {
     fs.mkdirSync(OUT_DIR, { recursive: true });
   }
@@ -141,23 +141,23 @@ app.post('/api/procesar', async (req, res) => {
   let resumenMaestro = fs.existsSync(MASTER_FILE) ? fs.readFileSync(MASTER_FILE, 'utf-8') : '';
   fs.writeFileSync(REPORT_FILE, '# Reporte Web\n\n' + resumenMaestro, 'utf-8');
 
-  res.json({
+  return res.json({
     mensaje: 'Procesamiento web completado exitosamente',
     procesados: resultadosProceso
   });
 });
 
 // Endpoint para consultar el maestro CSV
-app.get('/api/maestro', (req, res) => {
+app.get('/api/maestro', (req: Request, res: Response) => {
   if (!fs.existsSync(MASTER_FILE)) {
     return res.status(404).json({ error: 'Aún no hay registros en el maestro.' });
   }
   const contenido = fs.readFileSync(MASTER_FILE, 'utf-8');
-  res.send(contenido);
+  return res.send(contenido);
 });
 
 // Endpoint para aprobar/rechazar manualmente desde la web
-app.post('/api/aprobar', (req, res) => {
+app.post('/api/aprobar', (req: Request, res: Response) => {
   const { id, aprobar } = req.body;
 
   if (!fs.existsSync(MASTER_FILE)) {
@@ -182,7 +182,7 @@ app.post('/api/aprobar', (req, res) => {
   }
 
   fs.writeFileSync(MASTER_FILE, nuevasLineas.join('\n'), 'utf-8');
-  res.json({ mensaje: 'Contrato ' + id + ' actualizado correctamente.' });
+  return res.json({ mensaje: 'Contrato ' + id + ' actualizado correctamente.' });
 });
 
 app.listen(Number(PORT), '0.0.0.0', () => {

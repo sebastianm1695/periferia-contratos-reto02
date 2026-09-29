@@ -5,3 +5,4 @@ ID,Cliente,Valor,TipoContrato,EstadoFinal,RemitenteCorreo,Confianza,Observacione
 "msg-004","Cliente Desconocido",0,"Nuevo","Aprobado Manualmente","desconocido@periferia.com",0.5,"Confianza general menor a 0.8: requiere revision humana."
 "msg-005","Cliente Desconocido",0,"Nuevo","Aprobado Manualmente","desconocido@periferia.com",0.5,"Confianza general menor a 0.8: requiere revision humana."
 "msg-006","Cliente Desconocido",0,"Nuevo","Aprobado Manualmente","desconocido@periferia.com",0.5,"Confianza general menor a 0.8: requiere revision humana."
+"msg-001","Cliente Desconocido",0,"Nuevo","Rechazado","desconocido@periferia.com",0.5,"Confianza general menor a 0.8: requiere revision humana. | ID duplicado detectado: msg-001"
