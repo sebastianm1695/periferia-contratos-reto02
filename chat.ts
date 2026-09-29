@@ -1,159 +1,220 @@
 ﻿import { GoogleGenAI } from '@google/genai';
-import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { URL } from 'url';
+import readline from 'readline';
 
 const ai = new GoogleGenAI();
-const PORT = process.env.PORT || 3000;
 
-// Ruta del buzón administrativo
 const BUZON_DIR = path.join(process.cwd(), 'fixtures', 'reto-02', 'buzon');
+const OUT_DIR = path.join(process.cwd(), 'out');
+const MASTER_FILE = path.join(OUT_DIR, 'maestro-contratos.csv');
+const REPORT_FILE = path.join(OUT_DIR, 'reporte-alertas.md');
 
-// Función para inspeccionar los archivos del buzón
-function leerBuzon(): string[] {
-  try {
-    if (!fs.existsSync(BUZON_DIR)) {
-      return ['Carpeta de buzon no encontrada en fixtures/reto-02/buzon'];
-    }
-    const archivos = fs.readdirSync(BUZON_DIR);
-    return archivos.length > 0 ? archivos : ['El buzon esta actualmente vacio.'];
-  } catch (error: any) {
-    return [`Error leyendo el buzon: ${error.message}`];
-  }
+if (!fs.existsSync(OUT_DIR)) {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
 }
 
-// Función para generar respuestas con el modelo de IA
-async function generarRespuestaIA(prompt: string): Promise<string> {
-  const modelos = ['gemini-2.5-flash'];
-  for (const modelo of modelos) {
-    try {
-      const response = await ai.models.generateContent({
-        model: modelo,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }]
-      });
-      if (response.text) return response.text;
-    } catch (e) {
-      // Intenta con el siguiente paso si ocurre error
-    }
-  }
-  return 'Error de comunicacion con el modelo de IA en este momento.';
-}
-
-const server = http.createServer(async (req, res) => {
-  const parsedUrl = new URL(req.url || '', `http://${req.headers.host}`);
-
-  // Endpoint del chat para procesar los mensajes del usuario
-  if (parsedUrl.pathname === '/api/chat' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        const { message } = JSON.parse(body);
-        const lowerMsg = message.toLowerCase();
-
-        let replyText = '';
-
-        // Si el usuario solicita revisar el buzón o validar archivos
-        if (lowerMsg.includes('buzon') || lowerMsg.includes('listar') || lowerMsg.includes('archivos') || lowerMsg.includes('validar')) {
-          const archivosBuzon = leerBuzon();
-          const promptBuzon = `Actúa como un Agente de Registro de Contratos profesional. Los archivos encontrados actualmente en el buzón (${BUZON_DIR}) son: ${JSON.stringify(archivosBuzon)}. Explica al usuario el estado de los documentos y el resultado de la validación inicial de los contratos pendientes.`;
-          replyText = await generarRespuestaIA(promptBuzon);
-        } else {
-          // Conversación general con el agente
-          const promptGeneral = `Actúa como un Agente de Registro de Contratos profesional. Responde de manera clara y directa a la siguiente consulta del usuario: ${message}`;
-          replyText = await generarRespuestaIA(promptGeneral);
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ reply: replyText }));
-      } catch (error: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: error.message || 'Error interno' }));
-      }
+function preguntarAlOperador(pregunta: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  return new Promise(resolve => {
+    rl.question(pregunta, respuesta => {
+      rl.close();
+      resolve(respuesta.trim().toLowerCase());
     });
+  });
+}
+
+// Estructura para agrupar los archivos por cada carpeta msg-xxx
+interface CarpetaMensaje {
+  nombreCarpeta: string;
+  rutaContrato?: string;
+  rutaCorreo?: string;
+}
+
+function obtenerMensajesDelBuzon(dir: string): CarpetaMensaje[] {
+  let mensajes: CarpetaMensaje[] = [];
+  if (!fs.existsSync(dir)) return mensajes;
+
+  const elementos = fs.readdirSync(dir, { withFileTypes: true });
+  for (const elemento of elementos) {
+    const rutaElemento = path.join(dir, elemento.name);
+    if (elemento.isDirectory()) {
+      // Listar archivos dentro de cada carpeta msg-xxx
+      const subElementos = fs.readdirSync(rutaElemento);
+      const carpetaMsg: CarpetaMensaje = { nombreCarpeta: elemento.name };
+
+      for (const sub of subElementos) {
+        if (sub.toLowerCase().includes('contrato') || sub.toLowerCase().endsWith('.txt')) {
+          carpetaMsg.rutaContrato = path.join(rutaElemento, sub);
+        }
+        if (sub.toLowerCase().includes('correo') || sub.toLowerCase().endsWith('.json')) {
+          carpetaMsg.rutaCorreo = path.join(rutaElemento, sub);
+        }
+      }
+
+      if (carpetaMsg.rutaContrato || carpetaMsg.rutaCorreo) {
+        mensajes.push(carpetaMsg);
+      }
+    }
+  }
+  return mensajes;
+}
+
+async function validarPipelineConHumanInTheLoop() {
+  console.log('--- INICIANDO VALIDACION CON HUMAN-IN-THE-LOOP ---');
+
+  if (!fs.existsSync(BUZON_DIR)) {
+    console.error(`Error: La carpeta del buzon no existe en ${BUZON_DIR}`);
+    return;
+  }
+  
+  const mensajes = obtenerMensajesDelBuzon(BUZON_DIR);
+  
+  if (mensajes.length === 0) {
+    console.log('Aviso: No se encontraron carpetas de mensajes en el buzon.');
     return;
   }
 
-  // Interfaz visual de chat interactivo
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(`
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <title>Agente de Registro de Contratos</title>
-        <style>
-            body { font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .chat-container { width: 100%; max-width: 650px; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; height: 85vh; }
-            h2 { margin-top: 0; font-size: 1.2rem; color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 10px; }
-            #chat-box { flex: 1; overflow-y: auto; border: 1px solid #334155; padding: 15px; border-radius: 8px; margin-bottom: 15px; background: #0f172a; display: flex; flex-direction: column; gap: 10px; }
-            .message { padding: 10px 14px; border-radius: 8px; max-width: 85%; line-height: 1.4; white-space: pre-wrap; }
-            .user { background: #0284c7; align-self: flex-end; }
-            .bot { background: #334155; align-self: flex-start; }
-            .quick-actions { display: flex; gap: 8px; margin-bottom: 10px; }
-            .quick-btn { background: #334155; color: #38bdf8; border: 1px solid #0ea5e9; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
-            .quick-btn:hover { background: #0ea5e9; color: #fff; }
-            .input-group { display: flex; gap: 10px; }
-            input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 1rem; }
-            button.send { padding: 12px 20px; background: #0ea5e9; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-            button.send:hover { background: #0284c7; }
-        </style>
-    </head>
-    <body>
-        <div class="chat-container">
-            <h2>Agente de Registro de Contratos</h2>
-            <div id="chat-box">
-                <div class="message bot">Hola. Soy tu agente asistente para la gestion de contratos. Escribe "revisar buzon" o haz clic en el boton rapido para inspeccionar los documentos pendientes.</div>
-            </div>
-            <div class="quick-actions">
-                <button class="quick-btn" onclick="sendQuick('revisar buzon')">Revisar Buzon</button>
-                <button class="quick-btn" onclick="sendQuick('validar contratos')">Validar Contratos</button>
-            </div>
-            <div class="input-group">
-                <input type="text" id="userInput" placeholder="Escribe tu consulta o comando aqui..." autofocus />
-                <button class="send" onclick="sendMessage()">Enviar</button>
-            </div>
-        </div>
-        <script>
-            async function sendQuick(text) {
-                document.getElementById('userInput').value = text;
-                await sendMessage();
-            }
+  console.log('[1. leer_buzon] Mensajes detectados en carpetas msg-xxx:');
+  mensajes.forEach((item, index) => {
+    console.log(`  [${index + 1}] Carpeta: ${item.nombreCarpeta} (Contrato:${item.rutaContrato ? 'Sí' : 'No'}, Correo JSON: ${item.rutaCorreo ? 'Sí' : 'No'})`);
+  });
 
-            async function sendMessage() {
-                const input = document.getElementById('userInput');
-                const chatBox = document.getElementById('chat-box');
-                const text = input.value.trim();
-                if (!text) return;
+  for (const msg of mensajes) {
+    console.log('\n----------------------------------------');
+    console.log(`Procesando mensaje de la carpeta: ${msg.nombreCarpeta}`);
 
-                chatBox.innerHTML += \`<div class="message user">\${text}</div>\`;
-                input.value = '';
-                chatBox.scrollTop = chatBox.scrollHeight;
+    // Leer correo.json para extraer el remitente real
+    let correoRemitente = 'desconocido@periferia.com';
+    if (msg.rutaCorreo && fs.existsSync(msg.rutaCorreo)) {
+      try {
+        const datosCorreo = JSON.parse(fs.readFileSync(msg.rutaCorreo, 'utf-8'));
+        correoRemitente = datosCorreo.from || datosCorreo.remitente || datosCorreo.correo || correoRemitente;
+      } catch (e) {
+        console.log(`Aviso: No se pudo parsear el archivo JSON de correo en ${msg.nombreCarpeta}`);
+      }
+    }
 
-                try {
-                    const res = await fetch('/api/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text })
-                    });
-                    const data = await res.json();
-                    const reply = data.reply || data.error || 'Sin respuesta';
-                    chatBox.innerHTML += \`<div class="message bot">\${reply}</div>\`;
-                } catch (e) {
-                    chatBox.innerHTML += \`<div class="message bot">Error de conexion con el servidor.</div>\`;
-                }
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-            document.getElementById('userInput').addEventListener('keypress', function (e) {
-                if (e.key === 'Enter') sendMessage();
-            });
-        </script>
-    </body>
-    </html>
-  `);
-});
+    // Leer contrato.txt
+    let contenidoContrato = '';
+    if (msg.rutaContrato && fs.existsSync(msg.rutaContrato)) {
+      contenidoContrato = fs.readFileSync(msg.rutaContrato, 'utf-8');
+    } else {
+      console.log(`Aviso: No se encontró archivo de contrato legible en ${msg.nombreCarpeta}`);
+      continue;
+    }
 
-server.listen(Number(PORT), '0.0.0.0', () => {
-  console.log(`Servidor de chat activo en el puerto ${PORT}`);
-});
+    // 2. extraer con Gemini
+    console.log('[2. extraer] Extrayendo metadatos del contrato con Gemini...');
+    let metadata;
+    try {
+      const prompt = `Analiza el siguiente texto de contrato u otrosí corporativo y extrae los metadatos en un objeto JSON estricto con las siguientes claves:
+      - id (string, ID o número de contrato si se menciona, o usa el nombre de la carpeta si no hay)
+      - cliente (string)
+      - valor (número)
+      - fecha_inicio (YYYY-MM-DD)
+      - fecha_fin (YYYY-MM-DD)
+      - tipo_contrato (debe ser exactamente "Nuevo", "Actualización/Otrosí", "Duplicado" o "Rechazado")
+      - confianza_general (número flotante de 0.0 a 1.0 según la claridad de los datos)
+      - metricas_detalladas (objeto con confianza individual para cada atributo)
+
+      Texto del contrato:
+      ${contenidoContrato}`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: { responseMimeType: 'application/json' }
+      });
+
+      metadata = response.text ? JSON.parse(response.text) : null;
+    } catch (e) {
+      console.log(`Aviso: Error en IA, aplicando fallback para ${msg.nombreCarpeta}`);
+    }
+
+    if (!metadata) {
+      metadata = {
+        id: msg.nombreCarpeta,
+        cliente: 'Cliente Desconocido',
+        valor: 0,
+        fecha_inicio: '2026-01-01',
+        fecha_fin: '2026-12-31',
+        tipo_contrato: 'Nuevo',
+        confianza_general: 0.5,
+        metricas_detalladas: { id: 0.5, cliente: 0.5, valor: 0.5, fechas: 0.5, tipo: 0.5 }
+      };
+    }
+
+    // Asegurar que el ID use el de la carpeta si la IA devolvió algo genérico
+    if (!metadata.id || metadata.id === 'string') {
+      metadata.id = msg.nombreCarpeta;
+    }
+
+    console.log(`  -> ID Contrato: ${metadata.id}`);
+    console.log(`  -> Cliente: ${metadata.cliente}`);
+    console.log(`  -> Remitente (correo.json): ${correoRemitente}`);
+    console.log(`  -> Confianza General: ${(metadata.confianza_general * 100).toFixed(0)}%`);
+
+    // 3. validar reglas de negocio
+    console.log('[3. validar] Aplicando reglas de negocio corporativas...');
+    let estado = metadata.tipo_contrato || 'Nuevo';
+    const observaciones: string[] = [];
+
+    if (metadata.confianza_general < 0.8) {
+      observaciones.push('Confianza general menor a 0.8: requiere revision humana.');
+      estado = 'Revision Humana';
+    }
+
+    if (fs.existsSync(MASTER_FILE)) {
+      const maestroContenido = fs.readFileSync(MASTER_FILE, 'utf-8');
+      if (maestroContenido.includes(metadata.id)) {
+        estado = 'Duplicado';
+        observaciones.push(`ID duplicado detectado: ${metadata.id}`);
+      }
+    }
+
+    console.log(`  -> Estado preliminar: [${estado}]`);
+    if (observaciones.length > 0) {
+      console.log('  -> Observaciones detectadas:', observaciones);
+    }
+
+    // Mecanismo Human-in-the-Loop obligatorio si requiere revisión o duplicado
+    if (estado === 'Revision Humana' || estado === 'Duplicado') {
+      console.log(`\n[HUMAN-IN-THE-LOOP REQUERIDO] El contrato ${metadata.id} requiere validacion manual.`);
+      const respuesta = await preguntarAlOperador('Deseas aprobar y registrar de todos modos este contrato en el maestro? (s/n): ');
+      
+      if (respuesta !== 's' && respuesta !== 'si') {
+        console.log(`Operación cancelada por el operador. El contrato ${metadata.id} fue marcado como Rechazado/Omitido.`);
+        continue;
+      }
+      console.log('Aprobado manualmente por el operador. Continuando con el registro...');
+      estado = 'Aprobado Manualmente';
+    }
+
+    // 4. registrar en maestro CSV
+    console.log('[4. registrar] Guardando transacción en maestro CSV...');
+    if (!fs.existsSync(MASTER_FILE)) {
+      fs.writeFileSync(MASTER_FILE, 'ID,Cliente,Valor,TipoContrato,EstadoFinal,RemitenteCorreo,Confianza,Observaciones\n', 'utf-8');
+    }
+    const obsTexto = observaciones.join(' | ');
+    const linea = `"${metadata.id}","${metadata.cliente}",${metadata.valor},"${metadata.tipo_contrato}","${estado}","${correoRemitente}",${metadata.confianza_general},"${obsTexto}"\n`;
+    fs.appendFileSync(MASTER_FILE, linea, 'utf-8');
+    console.log(`  -> Registrado correctamente en ${MASTER_FILE}`);
+  }
+
+  // 5. reporte de alertas
+  console.log('\n[5. alertas] Generando reporte consolidado en Markdown...');
+  let resumenMaestro = 'Sin registros en maestro.';
+  if (fs.existsSync(MASTER_FILE)) {
+    resumenMaestro = fs.readFileSync(MASTER_FILE, 'utf-8');
+  }
+  const contenidoMarkdown = `# Reporte Automatizado de Alertas y Vigencias\n**Fecha:** ${new Date().toISOString().split('T')[0]}\n\n\`\`\`csv\n${resumenMaestro}\n\`\`\``;
+  fs.writeFileSync(REPORT_FILE, contenidoMarkdown, 'utf-8');
+
+  console.log('--- PROCESO COMPLETADO EXITOSAMENTE ---');
+}
+
+validarPipelineConHumanInTheLoop();
