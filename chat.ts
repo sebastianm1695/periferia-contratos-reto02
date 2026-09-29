@@ -17,9 +17,9 @@ const server = http.createServer(async (req, res) => {
       try {
         const { message } = JSON.parse(body);
         
-        // Llamada directa y limpia al modelo oficial actual
+        // Llamada usando el modelo gemini-3.8-flash requerido por la API actual
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: [
             { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde de manera clara y directa a la siguiente consulta del usuario: ${message}` }] }
           ]
