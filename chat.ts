@@ -19,7 +19,7 @@ const server = http.createServer(async (req, res) => {
         
         // Llamada al modelo Gemini
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: [
             { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde a la siguiente consulta del usuario: ${message}` }] }
           ]
