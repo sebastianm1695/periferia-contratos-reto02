@@ -47,6 +47,69 @@ function obtenerMensajesDelBuzon(dir: string): CarpetaMensaje[] {
   return mensajes;
 }
 
+// Interfaz Web Visual en la ruta principal (/)
+app.get('/', (req: Request, res: Response) => {
+  const html = `
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <title>Panel de Control - Procesador de Contratos</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+            .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+            h1 { color: #2c3e50; }
+            button { background: #3498db; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; margin-right: 10px; }
+            button:hover { background: #2980b9; }
+            pre { background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 5px; overflow-x: auto; }
+            .section { margin-top: 25px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🤖 Panel Web: Gestión y Validación de Contratos</h1>
+            <p>Automatización de contratos, metadatos con Gemini y validación Human-in-the-Loop.</p>
+            
+            <div class="section">
+                <button onclick="procesarBuzon()">🚀 Procesar Buzón Automáticamente</button>
+                <button onclick="cargarMaestro()" style="background: #27ae60;">📊 Ver Archivo Maestro</button>
+            </div>
+
+            <div class="section">
+                <h3>Resultado / Datos del Maestro:</h3>
+                <pre id="resultado">Haz clic en un botón para comenzar...</pre>
+            </div>
+        </div>
+
+        <script>
+            async function procesarBuzon() {
+                document.getElementById('resultado').innerText = "Procesando buzón con Gemini...";
+                try {
+                    const res = await fetch('/api/procesar', { method: 'POST' });
+                    const data = await res.json();
+                    document.getElementById('resultado').innerText = JSON.stringify(data, null, 2);
+                } catch (err) {
+                    document.getElementById('resultado').innerText = "Error: " + err.message;
+                }
+            }
+
+            async function cargarMaestro() {
+                document.getElementById('resultado').innerText = "Cargando archivo maestro...";
+                try {
+                    const res = await fetch('/api/maestro');
+                    const text = await res.text();
+                    document.getElementById('resultado').innerText = text;
+                } catch (err) {
+                    document.getElementById('resultado').innerText = "Aún no hay registros en el maestro o error: " + err.message;
+                }
+            }
+        </script>
+    </body>
+    </html>
+  `;
+  return res.send(html);
+});
+
 // Endpoint para procesar el buzón de forma autónoma desde la web
 app.post('/api/procesar', async (req: Request, res: Response) => {
   if (!fs.existsSync(OUT_DIR)) {
