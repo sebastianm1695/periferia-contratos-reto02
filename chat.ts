@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url || '', `http://${req.headers.host}`);
 
-  // Endpoint para procesar los mensajes del chat vía API interna
+  // Endpoint para procesar los mensajes del chat vía API interna con reintento automático
   if (parsedUrl.pathname === '/api/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -17,16 +17,33 @@ const server = http.createServer(async (req, res) => {
       try {
         const { message } = JSON.parse(body);
         
-        // Llamada al modelo Gemini
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: [
-            { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde a la siguiente consulta del usuario: ${message}` }] }
-          ]
-        });
+        let responseText = '';
+        // Lista de modelos alternativos para evitar errores de alta demanda (503)
+        const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+        let success = false;
+
+        for (const modelName of modelsToTry) {
+          try {
+            const response = await ai.models.generateContent({
+              model: modelName,
+              contents: [
+                { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde a la siguiente consulta del usuario: ${message}` }] }
+              ]
+            });
+            responseText = response.text || '';
+            success = true;
+            break; // Si un modelo responde con éxito, salimos del ciclo
+          } catch (err) {
+            console.warn(`Modelo ${modelName} no disponible, intentando con el siguiente...`);
+          }
+        }
+
+        if (!success) {
+          throw new Error('Todos los modelos están experimentando alta demanda en este momento. Intenta de nuevo en unos segundos.');
+        }
 
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ reply: response.text }));
+        res.end(JSON.stringify({ reply: responseText }));
       } catch (error: any) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: error.message || 'Error al procesar con Gemini' }));
@@ -35,7 +52,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Interfaz visual HTML para probar el agente en el navegador
+  // Interfaz visual HTML para interactuar con el agente en el navegador
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`
     <!DOCTYPE html>
@@ -48,7 +65,7 @@ const server = http.createServer(async (req, res) => {
             .chat-container { width: 100%; max-width: 600px; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; height: 80vh; }
             h2 { margin-top: 0; font-size: 1.2rem; color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 10px; }
             #chat-box { flex: 1; overflow-y: auto; border: 1px solid #334155; padding: 15px; border-radius: 8px; margin-bottom: 15px; background: #0f172a; display: flex; flex-direction: column; gap: 10px; }
-            .message { padding: 10px 14px; border-radius: 8px; max-width: 80%; line-height: 1.4; }
+            .message { padding: 10px 14px; border-radius: 8px; max-width: 80%; line-height: 1.4; white-space: pre-wrap; }
             .user { background: #0284c7; align-self: flex-end; }
             .bot { background: #334155; align-self: flex-start; }
             .input-group { display: flex; gap: 10px; }
