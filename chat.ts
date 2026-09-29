@@ -128,25 +128,13 @@ function registrarTransaccion(metadata: any, validacion: any) {
 
 // 5. alertas (Generación de reporte automatizado en Markdown)
 function generarReporteAlertas() {
-  let resumenMaestro = 'Sin registros en el maestro.';
+  let resumenMaestro = 'Sin registros en maestro.';
   if (fs.existsSync(MASTER_FILE)) {
     resumenMaestro = fs.readFileSync(MASTER_FILE, 'utf-8');
   }
 
   const fechaActual = new Date().toISOString().split('T')[0];
-  const contenidoMarkdown = `# Reporte Automatizado de Alertas y Vigencias
-**Fecha de Generación:** ${fechaActual}
-
-## 1. Estado del Maestro de Contratos
-\`\`\`csv
-${resumenMaestro}
-\`\`\`
-
-## 2. Seguimiento de Pólizas y Vigencias
-- **Contratos analizados:** Verificados correctamente en el ciclo actual.
-- **Alertas críticas:** Ninguna vigencia vencida detectada.
-`;
-
+  const contenidoMarkdown = `# Reporte Automatizado de Alertas y Vigencias\n**Fecha:** ${fechaActual}\n\n\`\`\`csv\n${resumenMaestro}\n\`\`\``;
   fs.writeFileSync(REPORT_FILE, contenidoMarkdown, 'utf-8');
   return contenidoMarkdown;
 }
@@ -162,40 +150,40 @@ const server = http.createServer(async (req, res) => {
       const archivos = leerBuzon();
       if (archivos.length === 0) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ resultado: '⚠️ El buzón está vacío. No hay archivos pendientes en fixtures/reto-02/buzon.' }));
+        res.end(JSON.stringify({ resultado: 'Aviso: El buzón está vacío en fixtures/reto-02/buzon.' }));
         return;
       }
 
-      let logEjecucion = '### 🚀 Ejecución Exitosa del Pipeline de 5 Fases\n\n';
+      let logEjecucion = '### Ejecucion del Pipeline de 5 Fases\n\n';
 
       for (const archivo of archivos) {
-        logEjecucion += `--- \n**Archivo:** \`${archivo}\`\n`;
+        logEjecucion += `--- \n**Archivo:** ${archivo}\n`;
         
         // Fase 1
-        logEjecucion += `1. **`leer_buzon`**: Inspeccionado correctamente.\n`;
+        logEjecucion += `1. **leer_buzon**: Inspeccionado correctamente.\n`;
 
         // Fase 2
         const metadata = await extraerMetadatos(archivo);
-        logEjecucion += `2. **`extraer`**: Metadatos extraídos (Cliente: *${metadata.cliente}*, Confianza: *${(metadata.confianza_general * 100).toFixed(0)}%*).\n`;
+        logEjecucion += `2. **extraer**: Metadatos extraidos (Cliente: ${metadata.cliente}, Confianza: ${(metadata.confianza_general * 100).toFixed(0)}%).\n`;
 
         // Fase 3
         const validacion = validarContrato(metadata);
-        logEjecucion += `3. **`validar`**: Clasificado como **[${validacion.estado}]**.\n`;
+        logEjecucion += `3. **validar**: Clasificado como [${validacion.estado}].\n`;
 
         // Fase 4
         registrarTransaccion(metadata, validacion);
-        logEjecucion += `4. **`registrar`**: Transacción guardada en \`out/maestro-contratos.csv\`.\n`;
+        logEjecucion += `4. **registrar**: Guardado en maestro-contratos.csv.\n`;
       }
 
       // Fase 5
       generarReporteAlertas();
-      logEjecucion += `\n5. **`alertas`**: Reporte generado en \`out/reporte-alertas.md\`.\n`;
+      logEjecucion += `\n5. **alertas**: Reporte generado en out/reporte-alertas.md.\n`;
 
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ resultado: logEjecucion }));
     } catch (error: any) {
       res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ resultado: `❌ Error: ${error.message}` }));
+      res.end(JSON.stringify({ resultado: `Error: ${error.message}` }));
     }
     return;
   }
@@ -207,9 +195,9 @@ const server = http.createServer(async (req, res) => {
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        <title>Pipeline ETV - Periferia IT</title>
+        <title>Pipeline - Periferia IT</title>
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            body { font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
             .container { width: 100%; max-width: 750px; background: #1e293b; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; flex-direction: column; height: 85vh; }
             h2 { color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 15px; margin-top: 0; }
             #output { flex: 1; overflow-y: auto; border: 1px solid #334155; padding: 20px; border-radius: 8px; background: #0f172a; font-family: monospace; white-space: pre-wrap; line-height: 1.6; color: #cbd5e1; font-size: 0.9rem; }
@@ -220,19 +208,19 @@ const server = http.createServer(async (req, res) => {
     <body>
         <div class="container">
             <h2>Pipeline de 5 Fases - Procesamiento de Contratos</h2>
-            <div id="output">Haz clic en el botón para iniciar el pipeline determinista sobre los archivos del buzón...</div>
-            <button onclick="ejecutarPipeline()">⚡ Ejecutar Pipeline Completo</button>
+            <div id="output">Haz clic en el botón para iniciar el pipeline determinista...</div>
+            <button onclick="ejecutarPipeline()">Ejecutar Pipeline Completo</button>
         </div>
         <script>
             async function ejecutarPipeline() {
                 const out = document.getElementById('output');
-                out.innerText = 'Ejecutando fases (leer_buzon -> extraer -> validar -> registrar -> alertas)...';
+                out.innerText = 'Ejecutando fases...';
                 try {
                     const res = await fetch('/api/ejecutar-pipeline', { method: 'POST' });
                     const data = await res.json();
                     out.innerHTML = data.resultado;
                 } catch(e) {
-                    out.innerText = '❌ Error de comunicación con el servidor.';
+                    out.innerText = 'Error de comunicación con el servidor.';
                 }
             }
         </script>
