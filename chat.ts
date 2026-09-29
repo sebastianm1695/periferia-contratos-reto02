@@ -78,11 +78,11 @@ app.post('/api/procesar', async (req, res) => {
 
     let metadata;
     try {
-      const prompt = "Analiza el texto del contrato y extrae en formato JSON estricto las claves: id, cliente, valor (numero), fecha_inicio (YYYY-MM-DD), fecha_fin (YYYY-MM-DD), tipo_contrato ('Nuevo', 'Actualizacion/Otrosí', 'Duplicado', 'Rechazado'), confianza_general (0.0 a 1.0). Texto: " + contenidoContrato;
+      const promptTexto = "Analiza el contrato y extrae JSON estricto con: id, cliente, valor numerico, fecha_inicio, fecha_fin, tipo_contrato ('Nuevo', 'Actualizacion/Otrosí', 'Duplicado', 'Rechazado'), confianza_general de 0.0 a 1.0. Contenido: " + contenidoContrato;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        contents: [{ role: 'user', parts: [{ text: promptTexto }] }],
         config: { responseMimeType: 'application/json' }
       });
 
@@ -117,7 +117,7 @@ app.post('/api/procesar', async (req, res) => {
       const maestroContenido = fs.readFileSync(MASTER_FILE, 'utf-8');
       if (maestroContenido.includes(metadata.id)) {
         estado = 'Duplicado Pendiente';
-        observaciones.push(`ID duplicado detectado: ${metadata.id}`);
+        observaciones.push('ID duplicado detectado: ' + metadata.id);
       }
     }
 
@@ -126,7 +126,7 @@ app.post('/api/procesar', async (req, res) => {
     }
 
     const obsTexto = observaciones.join(' | ');
-    const linea = `"${metadata.id}","${metadata.cliente}",${metadata.valor \vert{}\vert{} 0},"${metadata.tipo_contrato}","${estado}","${correoRemitente}",${metadata.confianza_general},"${obsTexto}"\n`;
+    const linea = '"' + metadata.id + '","' + metadata.cliente + '",' + (metadata.valor || 0) + ',"' + metadata.tipo_contrato + '","' + estado + '","' + correoRemitente + '",' + metadata.confianza_general + ',"' + obsTexto + '"\n';
     fs.appendFileSync(MASTER_FILE, linea, 'utf-8');
 
     resultadosProceso.push({
@@ -139,7 +139,7 @@ app.post('/api/procesar', async (req, res) => {
   }
 
   let resumenMaestro = fs.existsSync(MASTER_FILE) ? fs.readFileSync(MASTER_FILE, 'utf-8') : '';
-  fs.writeFileSync(REPORT_FILE, `# Reporte Automatizado de Alertas y Vigencias\n\`\`\`csv\n${resumenMaestro}\n\`\`\``, 'utf-8');
+  fs.writeFileSync(REPORT_FILE, '# Reporte Web\n\n' + resumenMaestro, 'utf-8');
 
   res.json({
     mensaje: 'Procesamiento web completado exitosamente',
@@ -156,7 +156,7 @@ app.get('/api/maestro', (req, res) => {
   res.send(contenido);
 });
 
-// Endpoint para aprobar/rechazar manualmente desde la web (Human-in-the-Loop web)
+// Endpoint para aprobar/rechazar manualmente desde la web
 app.post('/api/aprobar', (req, res) => {
   const { id, aprobar } = req.body;
 
@@ -168,7 +168,7 @@ app.post('/api/aprobar', (req, res) => {
   let encontrado = false;
 
   const nuevasLineas = lineas.map(linea => {
-    if (linea.includes(`"${id}"`)) {
+    if (linea.includes('"' + id + '"')) {
       encontrado = true;
       const partes = linea.split(',');
       partes[4] = aprobar ? '"Aprobado Manualmente"' : '"Rechazado por Operador"';
@@ -178,13 +178,13 @@ app.post('/api/aprobar', (req, res) => {
   });
 
   if (!encontrado) {
-    return res.status(404).json({ error: `Contrato con ID ${id} no encontrado en el maestro.` });
+    return res.status(404).json({ error: 'Contrato con ID ' + id + ' no encontrado en el maestro.' });
   }
 
   fs.writeFileSync(MASTER_FILE, nuevasLineas.join('\n'), 'utf-8');
-  res.json({ mensaje: `Contrato ${id} actualizado correctamente.` });
+  res.json({ mensaje: 'Contrato ' + id + ' actualizado correctamente.' });
 });
 
 app.listen(Number(PORT), '0.0.0.0', () => {
-  console.log(`Servidor web activo en el puerto ${PORT}`);
+  console.log('Servidor web activo en el puerto ' + PORT);
 });
