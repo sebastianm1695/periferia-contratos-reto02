@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url || '', `http://${req.headers.host}`);
 
-  // Endpoint para procesar los mensajes del chat vía API interna con reintento automático
+  // Endpoint para procesar los mensajes del chat vía API interna
   if (parsedUrl.pathname === '/api/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -17,36 +17,22 @@ const server = http.createServer(async (req, res) => {
       try {
         const { message } = JSON.parse(body);
         
-        let responseText = '';
-        // Lista de modelos alternativos actualizados para mayor estabilidad
-        const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
-        let success = false;
+        // Llamada directa y limpia al modelo oficial actual
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [
+            { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde de manera clara y directa a la siguiente consulta del usuario: ${message}` }] }
+          ]
+        });
 
-        for (const modelName of modelsToTry) {
-          try {
-            const response = await ai.models.generateContent({
-              model: modelName,
-              contents: [
-                { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde a la siguiente consulta del usuario: ${message}` }] }
-              ]
-            });
-            responseText = response.text || '';
-            success = true;
-            break; // Si un modelo responde con éxito, salimos del ciclo
-          } catch (err: any) {
-            console.warn(`Modelo ${modelName} falló, intentando con el siguiente...`, err.message);
-          }
-        }
-
-        if (!success) {
-          throw new Error('Todos los modelos están experimentando alta demanda en este momento. Intenta de nuevo en unos segundos.');
-        }
+        const replyText = response.text || 'No se obtuvo respuesta del modelo.';
 
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ reply: responseText }));
+        res.end(JSON.stringify({ reply: replyText }));
       } catch (error: any) {
+        console.error('Error detallado de Gemini:', error);
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: error.message || 'Error al procesar con Gemini' }));
+        res.end(JSON.stringify({ error: 'Error al comunicarse con la IA: ' + (error.message || 'Desconocido') }));
       }
     });
     return;
