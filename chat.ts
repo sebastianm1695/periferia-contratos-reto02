@@ -78,17 +78,7 @@ app.post('/api/procesar', async (req, res) => {
 
     let metadata;
     try {
-      const prompt = `Analiza el siguiente texto de contrato u otrosí corporativo y extrae los metadatos en un objeto JSON estricto con las siguientes claves:
-      - id (string, ID o número de contrato si se menciona, o usa el nombre de la carpeta si no hay)
-      - cliente (string)
-      - valor (número)
-      - fecha_inicio (YYYY-MM-DD)
-      - fecha_fin (YYYY-MM-DD)
-      - tipo_contrato (debe ser exactamente "Nuevo", "Actualización/Otrosí", "Duplicado" o "Rechazado")
-      - confianza_general (número flotante de 0.0 a 1.0 según la claridad de los datos)
-
-      Texto del contrato:
-      ${contenidoContrato}`;
+      const prompt = "Analiza el texto del contrato y extrae en formato JSON estricto las claves: id, cliente, valor (numero), fecha_inicio (YYYY-MM-DD), fecha_fin (YYYY-MM-DD), tipo_contrato ('Nuevo', 'Actualizacion/Otrosí', 'Duplicado', 'Rechazado'), confianza_general (0.0 a 1.0). Texto: " + contenidoContrato;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
