@@ -7,222 +7,147 @@ import { URL } from 'url';
 const ai = new GoogleGenAI();
 const PORT = process.env.PORT || 3000;
 
-// Directorios y archivos requeridos por la prueba
+// Ruta del buzón administrativo
 const BUZON_DIR = path.join(process.cwd(), 'fixtures', 'reto-02', 'buzon');
-const OUT_DIR = path.join(process.cwd(), 'out');
-const MASTER_FILE = path.join(OUT_DIR, 'maestro-contratos.csv');
-const REPORT_FILE = path.join(OUT_DIR, 'reporte-alertas.md');
 
-// Asegurar que exista el directorio de salida
-if (!fs.existsSync(OUT_DIR)) {
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-}
-
-// Catálogo oficial simulado de comerciales para la validación
-const CATALOGO_COMERCIALES = [
-  'comercial1@periferia.com',
-  'comercial2@periferia.com',
-  'sebastian.moreno@periferia.com'
-];
-
-// ==========================================
-// PIPELINE DE 5 FASES DETERMINISTAS
-// ==========================================
-
-// 1. leer_buzon
-function leerBuzon() {
-  if (!fs.existsSync(BUZON_DIR)) {
-    throw new Error(`La carpeta del buzón no existe en la ruta: ${BUZON_DIR}`);
-  }
-  const archivos = fs.readdirSync(BUZON_DIR).filter(file => file.endsWith('.txt') || file.endsWith('.json') || file.endsWith('.csv'));
-  return archivos;
-}
-
-// 2. extraer (Extracción con IA y cálculo de confianza)
-async function extraerMetadatos(nombreArchivo: string) {
-  const filePath = path.join(BUZON_DIR, nombreArchivo);
-  const contenido = fs.readFileSync(filePath, 'utf-8');
-
-  const prompt = `Analiza el siguiente documento de contrato u otrosí corporativo y extrae los metadatos en un objeto JSON estricto con las siguientes claves:
-  - id (string)
-  - cliente (string)
-  - valor (número)
-  - fecha_inicio (YYYY-MM-DD)
-  - fecha_fin (YYYY-MM-DD)
-  - tipo_contrato (debe ser exactamente "Nuevo", "Actualización/Otrosí", "Duplicado" o "Rechazado")
-  - correo_comercial (string)
-  - confianza_general (número flotante de 0.0 a 1.0)
-  - metricas_detalladas (objeto con confianza individual para cada atributo)
-
-  Contenido del documento:
-  ${contenido}`;
-
+// Función para inspeccionar los archivos del buzón
+function leerBuzon(): string[] {
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: { responseMimeType: 'application/json' }
-    });
-    
-    if (response.text) {
-      return JSON.parse(response.text);
+    if (!fs.existsSync(BUZON_DIR)) {
+      return ['Carpeta de buzon no encontrada en fixtures/reto-02/buzon'];
     }
-  } catch (e) {
-    // Fallback por seguridad si ocurre saturación puntual
+    const archivos = fs.readdirSync(BUZON_DIR);
+    return archivos.length > 0 ? archivos : ['El buzon esta actualmente vacio.'];
+  } catch (error: any) {
+    return [`Error leyendo el buzon: ${error.message}`];
   }
-
-  return {
-    id: nombreArchivo.replace(/\.[^/.]+$/, ''),
-    cliente: 'Cliente Desconocido',
-    valor: 0,
-    fecha_inicio: '2026-01-01',
-    fecha_fin: '2026-12-31',
-    tipo_contrato: 'Nuevo',
-    correo_comercial: 'desconocido@periferia.com',
-    confianza_general: 0.5,
-    metricas_detalladas: { id: 0.5, cliente: 0.5, valor: 0.5, fechas: 0.5, tipo: 0.5, correo: 0.5 }
-  };
 }
 
-// 3. validar (Reglas de negocio corporativas)
-function validarContrato(metadata: any) {
-  let estado = metadata.tipo_contrato || 'Nuevo';
-  const observaciones: string[] = [];
-
-  // Validación de umbral de confianza (< 0.8 requiere revisión humana)
-  if (metadata.confianza_general < 0.8) {
-    observaciones.push('Confianza general menor a 0.8: requiere revisión humana.');
-    estado = 'Revisión Humana';
-  }
-
-  // Validar existencia del comercial en el catálogo oficial
-  const comercialValido = CATALOGO_COMERCIALES.includes(metadata.correo_comercial);
-  if (!comercialValido) {
-    observaciones.push(`Comercial no verificado en catálogo: ${metadata.correo_comercial}`);
-    if (estado !== 'Revisión Humana') estado = 'Revisión Humana';
-  }
-
-  // Detección de duplicados en el maestro
-  if (fs.existsSync(MASTER_FILE)) {
-    const maestroContenido = fs.readFileSync(MASTER_FILE, 'utf-8');
-    if (maestroContenido.includes(metadata.id)) {
-      estado = 'Duplicado';
-      observaciones.push(`ID duplicado detectado: ${metadata.id}`);
+// Función para generar respuestas con el modelo de IA
+async function generarRespuestaIA(prompt: string): Promise<string> {
+  const modelos = ['gemini-2.5-flash'];
+  for (const modelo of modelos) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelo,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      });
+      if (response.text) return response.text;
+    } catch (e) {
+      // Intenta con el siguiente paso si ocurre error
     }
   }
-
-  return { estado, observaciones };
+  return 'Error de comunicacion con el modelo de IA en este momento.';
 }
 
-// 4. registrar (Inserción en archivo maestro corporativo CSV / SharePoint simulado)
-function registrarTransaccion(metadata: any, validacion: any) {
-  if (!fs.existsSync(MASTER_FILE)) {
-    const cabecera = 'ID,Cliente,Valor,TipoContrato,EstadoFinal,Comercial,Confianza,Observaciones\n';
-    fs.writeFileSync(MASTER_FILE, cabecera, 'utf-8');
-  }
-
-  const obsTexto = validacion.observaciones.join(' | ');
-  const linea = `"${metadata.id}","${metadata.cliente}",${metadata.valor},"${metadata.tipo_contrato}","${validacion.estado}","${metadata.correo_comercial}",${metadata.confianza_general},"${obsTexto}"\n`;
-  fs.appendFileSync(MASTER_FILE, linea, 'utf-8');
-}
-
-// 5. alertas (Generación de reporte automatizado en Markdown)
-function generarReporteAlertas() {
-  let resumenMaestro = 'Sin registros en maestro.';
-  if (fs.existsSync(MASTER_FILE)) {
-    resumenMaestro = fs.readFileSync(MASTER_FILE, 'utf-8');
-  }
-
-  const fechaActual = new Date().toISOString().split('T')[0];
-  const contenidoMarkdown = `# Reporte Automatizado de Alertas y Vigencias\n**Fecha:** ${fechaActual}\n\n\`\`\`csv\n${resumenMaestro}\n\`\`\``;
-  fs.writeFileSync(REPORT_FILE, contenidoMarkdown, 'utf-8');
-  return contenidoMarkdown;
-}
-
-// ==========================================
-// SERVIDOR WEB E INTERFAZ DE CONTROL
-// ==========================================
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url || '', `http://${req.headers.host}`);
 
-  if (parsedUrl.pathname === '/api/ejecutar-pipeline' && req.method === 'POST') {
-    try {
-      const archivos = leerBuzon();
-      if (archivos.length === 0) {
+  // Endpoint del chat para procesar los mensajes del usuario
+  if (parsedUrl.pathname === '/api/chat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { message } = JSON.parse(body);
+        const lowerMsg = message.toLowerCase();
+
+        let replyText = '';
+
+        // Si el usuario solicita revisar el buzón o validar archivos
+        if (lowerMsg.includes('buzon') || lowerMsg.includes('listar') || lowerMsg.includes('archivos') || lowerMsg.includes('validar')) {
+          const archivosBuzon = leerBuzon();
+          const promptBuzon = `Actúa como un Agente de Registro de Contratos profesional. Los archivos encontrados actualmente en el buzón (${BUZON_DIR}) son: ${JSON.stringify(archivosBuzon)}. Explica al usuario el estado de los documentos y el resultado de la validación inicial de los contratos pendientes.`;
+          replyText = await generarRespuestaIA(promptBuzon);
+        } else {
+          // Conversación general con el agente
+          const promptGeneral = `Actúa como un Agente de Registro de Contratos profesional. Responde de manera clara y directa a la siguiente consulta del usuario: ${message}`;
+          replyText = await generarRespuestaIA(promptGeneral);
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ resultado: 'Aviso: El buzón está vacío en fixtures/reto-02/buzon.' }));
-        return;
+        res.end(JSON.stringify({ reply: replyText }));
+      } catch (error: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: error.message || 'Error interno' }));
       }
-
-      let logEjecucion = '### Ejecucion del Pipeline de 5 Fases\n\n';
-
-      for (const archivo of archivos) {
-        logEjecucion += `--- \n**Archivo:** ${archivo}\n`;
-        
-        // Fase 1
-        logEjecucion += `1. **leer_buzon**: Inspeccionado correctamente.\n`;
-
-        // Fase 2
-        const metadata = await extraerMetadatos(archivo);
-        logEjecucion += `2. **extraer**: Metadatos extraidos (Cliente: ${metadata.cliente}, Confianza: ${(metadata.confianza_general * 100).toFixed(0)}%).\n`;
-
-        // Fase 3
-        const validacion = validarContrato(metadata);
-        logEjecucion += `3. **validar**: Clasificado como [${validacion.estado}].\n`;
-
-        // Fase 4
-        registrarTransaccion(metadata, validacion);
-        logEjecucion += `4. **registrar**: Guardado en maestro-contratos.csv.\n`;
-      }
-
-      // Fase 5
-      generarReporteAlertas();
-      logEjecucion += `\n5. **alertas**: Reporte generado en out/reporte-alertas.md.\n`;
-
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ resultado: logEjecucion }));
-    } catch (error: any) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ resultado: `Error: ${error.message}` }));
-    }
+    });
     return;
   }
 
-  // Interfaz HTML de control
+  // Interfaz visual de chat interactivo
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        <title>Pipeline - Periferia IT</title>
+        <title>Agente de Registro de Contratos</title>
         <style>
             body { font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .container { width: 100%; max-width: 750px; background: #1e293b; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; flex-direction: column; height: 85vh; }
-            h2 { color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 15px; margin-top: 0; }
-            #output { flex: 1; overflow-y: auto; border: 1px solid #334155; padding: 20px; border-radius: 8px; background: #0f172a; font-family: monospace; white-space: pre-wrap; line-height: 1.6; color: #cbd5e1; font-size: 0.9rem; }
-            button { margin-top: 20px; padding: 14px; background: #0ea5e9; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 1rem; }
-            button:hover { background: #0284c7; }
+            .chat-container { width: 100%; max-width: 650px; background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; height: 85vh; }
+            h2 { margin-top: 0; font-size: 1.2rem; color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+            #chat-box { flex: 1; overflow-y: auto; border: 1px solid #334155; padding: 15px; border-radius: 8px; margin-bottom: 15px; background: #0f172a; display: flex; flex-direction: column; gap: 10px; }
+            .message { padding: 10px 14px; border-radius: 8px; max-width: 85%; line-height: 1.4; white-space: pre-wrap; }
+            .user { background: #0284c7; align-self: flex-end; }
+            .bot { background: #334155; align-self: flex-start; }
+            .quick-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+            .quick-btn { background: #334155; color: #38bdf8; border: 1px solid #0ea5e9; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+            .quick-btn:hover { background: #0ea5e9; color: #fff; }
+            .input-group { display: flex; gap: 10px; }
+            input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 1rem; }
+            button.send { padding: 12px 20px; background: #0ea5e9; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+            button.send:hover { background: #0284c7; }
         </style>
     </head>
     <body>
-        <div class="container">
-            <h2>Pipeline de 5 Fases - Procesamiento de Contratos</h2>
-            <div id="output">Haz clic en el botón para iniciar el pipeline determinista...</div>
-            <button onclick="ejecutarPipeline()">Ejecutar Pipeline Completo</button>
+        <div class="chat-container">
+            <h2>Agente de Registro de Contratos</h2>
+            <div id="chat-box">
+                <div class="message bot">Hola. Soy tu agente asistente para la gestion de contratos. Escribe "revisar buzon" o haz clic en el boton rapido para inspeccionar los documentos pendientes.</div>
+            </div>
+            <div class="quick-actions">
+                <button class="quick-btn" onclick="sendQuick('revisar buzon')">Revisar Buzon</button>
+                <button class="quick-btn" onclick="sendQuick('validar contratos')">Validar Contratos</button>
+            </div>
+            <div class="input-group">
+                <input type="text" id="userInput" placeholder="Escribe tu consulta o comando aqui..." autofocus />
+                <button class="send" onclick="sendMessage()">Enviar</button>
+            </div>
         </div>
         <script>
-            async function ejecutarPipeline() {
-                const out = document.getElementById('output');
-                out.innerText = 'Ejecutando fases...';
-                try {
-                    const res = await fetch('/api/ejecutar-pipeline', { method: 'POST' });
-                    const data = await res.json();
-                    out.innerHTML = data.resultado;
-                } catch(e) {
-                    out.innerText = 'Error de comunicación con el servidor.';
-                }
+            async function sendQuick(text) {
+                document.getElementById('userInput').value = text;
+                await sendMessage();
             }
+
+            async function sendMessage() {
+                const input = document.getElementById('userInput');
+                const chatBox = document.getElementById('chat-box');
+                const text = input.value.trim();
+                if (!text) return;
+
+                chatBox.innerHTML += \`<div class="message user">\${text}</div>\`;
+                input.value = '';
+                chatBox.scrollTop = chatBox.scrollHeight;
+
+                try {
+                    const res = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: text })
+                    });
+                    const data = await res.json();
+                    const reply = data.reply || data.error || 'Sin respuesta';
+                    chatBox.innerHTML += \`<div class="message bot">\${reply}</div>\`;
+                } catch (e) {
+                    chatBox.innerHTML += \`<div class="message bot">Error de conexion con el servidor.</div>\`;
+                }
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+            document.getElementById('userInput').addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') sendMessage();
+            });
         </script>
     </body>
     </html>
@@ -230,5 +155,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(Number(PORT), '0.0.0.0', () => {
-  console.log(`Servidor activo en el puerto ${PORT}`);
+  console.log(`Servidor de chat activo en el puerto ${PORT}`);
 });
