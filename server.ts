@@ -1,21 +1,27 @@
 ﻿import { GoogleGenAI } from '@google/genai';
+import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import readline from 'readline';
 
+const app = express();
+const PORT = process.env.PORT || 3000;
 const ai = new GoogleGenAI();
 
 const BUZON_DIR = path.join(process.cwd(), 'fixtures', 'reto-02', 'buzon');
 const OUT_DIR = path.join(process.cwd(), 'out');
 const MASTER_FILE = path.join(OUT_DIR, 'maestro-contratos.csv');
+const REPORT_FILE = path.join(OUT_DIR, 'reporte-alertas.md');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
+app.use(express.json());
 
-function obtenerMensajesDelBuzon(dir: string) {
-  let mensajes: any[] = [];
+interface CarpetaMensaje {
+  nombreCarpeta: string;
+  rutaContrato?: string;
+  rutaCorreo?: string;
+}
+
+function obtenerMensajesDelBuzon(dir: string): CarpetaMensaje[] {
+  let mensajes: CarpetaMensaje[] = [];
   if (!fs.existsSync(dir)) return mensajes;
 
   const elementos = fs.readdirSync(dir, { withFileTypes: true });
@@ -23,7 +29,7 @@ function obtenerMensajesDelBuzon(dir: string) {
     const rutaElemento = path.join(dir, elemento.name);
     if (elemento.isDirectory()) {
       const subElementos = fs.readdirSync(rutaElemento);
-      const carpetaMsg: any = { nombreCarpeta: elemento.name };
+      const carpetaMsg: CarpetaMensaje = { nombreCarpeta: elemento.name };
 
       for (const sub of subElementos) {
         if (sub.toLowerCase().includes('contrato') || sub.toLowerCase().endsWith('.txt')) {
@@ -41,37 +47,37 @@ function obtenerMensajesDelBuzon(dir: string) {
   return mensajes;
 }
 
-async function ejecutarPipelineLocal() {
+// Endpoint para procesar el buzón de forma autónoma desde la web
+app.post('/api/procesar', async (req, res) => {
   if (!fs.existsSync(OUT_DIR)) {
     fs.mkdirSync(OUT_DIR, { recursive: true });
   }
 
   const mensajes = obtenerMensajesDelBuzon(BUZON_DIR);
   if (mensajes.length === 0) {
-    console.log('No se encontraron carpetas en el buzón.');
-    rl.close();
-    return;
+    return res.status(404).json({ error: 'No se encontraron carpetas de mensajes en el buzón.' });
   }
 
+  const resultadosProceso = [];
+
   for (const msg of mensajes) {
-    console.log(`\nProcesando mensaje de la carpeta: ${msg.nombreCarpeta}`);
-    
     let correoRemitente = 'desconocido@periferia.com';
     if (msg.rutaCorreo && fs.existsSync(msg.rutaCorreo)) {
       try {
         const datosCorreo = JSON.parse(fs.readFileSync(msg.rutaCorreo, 'utf-8'));
-        correoRemitente = datosCorreo.from || datosCorreo.remitente || correoRemitente;
+        correoRemitente = datosCorreo.from || datosCorreo.remitente || datosCorreo.correo || correoRemitente;
       } catch (e) {}
     }
 
     let contenidoContrato = '';
     if (msg.rutaContrato && fs.existsSync(msg.rutaContrato)) {
       contenidoContrato = fs.readFileSync(msg.rutaContrato, 'utf-8');
+    } else {
+      continue;
     }
 
     let metadata;
     try {
-      console.log('[2. extraer] Extrayendo metadatos del contrato con Gemini...');
       const promptTexto = "Analiza el contrato y extrae JSON estricto con: id, cliente, valor numerico, fecha_inicio, fecha_fin, tipo_contrato ('Nuevo', 'Actualizacion/Otrosí', 'Duplicado', 'Rechazado'), confianza_general de 0.0 a 1.0. Contenido: " + contenidoContrato;
 
       const response = await ai.models.generateContent({
@@ -82,7 +88,6 @@ async function ejecutarPipelineLocal() {
 
       metadata = response.text ? JSON.parse(response.text) : null;
     } catch (e) {
-      console.log('Aviso: Error en IA, aplicando fallback para ' + msg.nombreCarpeta);
       metadata = null;
     }
 
@@ -96,12 +101,10 @@ async function ejecutarPipelineLocal() {
       };
     }
 
-    console.log(`-> ID Contrato: ${metadata.id}`);
-    console.log(`-> Cliente: ${metadata.cliente}`);
-    console.log(`-> Remitente: ${correoRemitente}`);
-    console.log(`-> Confianza General: ${metadata.confianza_general * 100}%`);
+    if (!metadata.id || metadata.id === 'string') {
+      metadata.id = msg.nombreCarpeta;
+    }
 
-    console.log('[3. validar] Aplicando reglas de negocio corporativas...');
     let estado = metadata.tipo_contrato || 'Nuevo';
     const observaciones: string[] = [];
 
@@ -118,35 +121,70 @@ async function ejecutarPipelineLocal() {
       }
     }
 
-    console.log(`-> Estado preliminar: [${estado}]`);
-    console.log(`-> Observaciones:`, observaciones);
-
-    if (estado !== metadata.tipo_contrato) {
-      console.log(`[HUMAN-IN-THE-LOOP REQUERIDO] El contrato ${metadata.id} requiere validacion manual.`);
-      
-      rl.question('Deseas aprobar y registrar de todos modos este contrato en el maestro? (s/n): ', (respuesta) => {
-        const aprobado = respuesta.trim().toLowerCase() === 's';
-        const estadoFinal = aprobado ? 'Aprobado Manualmente' : 'Rechazado';
-        
-        guardarEnMaestro(metadata, estadoFinal, correoRemitente, observaciones);
-        rl.close();
-      });
-      return;
-    } else {
-      guardarEnMaestro(metadata, estado, correoRemitente, observaciones);
+    if (!fs.existsSync(MASTER_FILE)) {
+      fs.writeFileSync(MASTER_FILE, 'ID,Cliente,Valor,TipoContrato,EstadoFinal,RemitenteCorreo,Confianza,Observaciones\n', 'utf-8');
     }
-  }
-  rl.close();
-}
 
-function guardarEnMaestro(metadata: any, estado: string, remitente: string, observaciones: string[]) {
+    const obsTexto = observaciones.join(' | ');
+    const linea = '"' + metadata.id + '","' + metadata.cliente + '",' + (metadata.valor || 0) + ',"' + metadata.tipo_contrato + '","' + estado + '","' + correoRemitente + '",' + metadata.confianza_general + ',"' + obsTexto + '"\n';
+    fs.appendFileSync(MASTER_FILE, linea, 'utf-8');
+
+    resultadosProceso.push({
+      id: metadata.id,
+      cliente: metadata.cliente,
+      estado,
+      confianza: metadata.confianza_general,
+      observaciones
+    });
+  }
+
+  let resumenMaestro = fs.existsSync(MASTER_FILE) ? fs.readFileSync(MASTER_FILE, 'utf-8') : '';
+  fs.writeFileSync(REPORT_FILE, '# Reporte Web\n\n' + resumenMaestro, 'utf-8');
+
+  res.json({
+    mensaje: 'Procesamiento web completado exitosamente',
+    procesados: resultadosProceso
+  });
+});
+
+// Endpoint para consultar el maestro CSV
+app.get('/api/maestro', (req, res) => {
   if (!fs.existsSync(MASTER_FILE)) {
-    fs.writeFileSync(MASTER_FILE, 'ID,Cliente,Valor,TipoContrato,EstadoFinal,RemitenteCorreo,Confianza,Observaciones\n', 'utf-8');
+    return res.status(404).json({ error: 'Aún no hay registros en el maestro.' });
   }
-  const obsTexto = observaciones.join(' | ');
-  const linea = `"${metadata.id}","${metadata.cliente}",${metadata.valor || 0},"${metadata.tipo_contrato}","${estado}","${remitente}",${metadata.confianza_general},"${obsTexto}"\n`;
-  fs.appendFileSync(MASTER_FILE, linea, 'utf-8');
-  console.log('Registro guardado exitosamente en el maestro.');
-}
+  const contenido = fs.readFileSync(MASTER_FILE, 'utf-8');
+  res.send(contenido);
+});
 
-ejecutarPipelineLocal();
+// Endpoint para aprobar/rechazar manualmente desde la web
+app.post('/api/aprobar', (req, res) => {
+  const { id, aprobar } = req.body;
+
+  if (!fs.existsSync(MASTER_FILE)) {
+    return res.status(404).json({ error: 'No existe el archivo maestro.' });
+  }
+
+  const lineas = fs.readFileSync(MASTER_FILE, 'utf-8').split('\n');
+  let encontrado = false;
+
+  const nuevasLineas = lineas.map(linea => {
+    if (linea.includes('"' + id + '"')) {
+      encontrado = true;
+      const partes = linea.split(',');
+      partes[4] = aprobar ? '"Aprobado Manualmente"' : '"Rechazado por Operador"';
+      return partes.join(',');
+    }
+    return linea;
+  });
+
+  if (!encontrado) {
+    return res.status(404).json({ error: 'Contrato con ID ' + id + ' no encontrado en el maestro.' });
+  }
+
+  fs.writeFileSync(MASTER_FILE, nuevasLineas.join('\n'), 'utf-8');
+  res.json({ mensaje: 'Contrato ' + id + ' actualizado correctamente.' });
+});
+
+app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log('Servidor web activo en el puerto ' + PORT);
+});
