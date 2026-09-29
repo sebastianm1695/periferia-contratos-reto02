@@ -18,8 +18,8 @@ const server = http.createServer(async (req, res) => {
         const { message } = JSON.parse(body);
         
         let responseText = '';
-        // Lista de modelos alternativos para evitar errores de alta demanda (503)
-        const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+        // Lista de modelos alternativos actualizados para mayor estabilidad
+        const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
         let success = false;
 
         for (const modelName of modelsToTry) {
@@ -33,8 +33,8 @@ const server = http.createServer(async (req, res) => {
             responseText = response.text || '';
             success = true;
             break; // Si un modelo responde con éxito, salimos del ciclo
-          } catch (err) {
-            console.warn(`Modelo ${modelName} no disponible, intentando con el siguiente...`);
+          } catch (err: any) {
+            console.warn(`Modelo ${modelName} falló, intentando con el siguiente...`, err.message);
           }
         }
 
