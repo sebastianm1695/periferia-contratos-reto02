@@ -6,6 +6,31 @@ import { URL } from 'url';
 const ai = new GoogleGenAI();
 const PORT = process.env.PORT || 3000;
 
+// Función auxiliar con Exponential Backoff para reintentar llamadas a la IA
+async function generateWithBackoff(prompt: string, maxRetries = 3): Promise<string> {
+  let delay = 1000; // Retraso inicial de 1 segundo
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [
+          { role: 'user', parts: [{ text: prompt }] }
+        ]
+      });
+      return response.text || 'No se obtuvo respuesta del modelo.';
+    } catch (error: any) {
+      console.warn(`Intento ${attempt} falló (Modelo ocupado o error 503).`);
+      if (attempt === maxRetries) {
+        throw new Error(`Demasiada congestión en la IA tras ${maxRetries} intentos. Por favor, intenta de nuevo en unos segundos.`);
+      }
+      // Espera exponencial (1s, 2s, 4s...) antes del siguiente intento
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2;
+    }
+  }
+  throw new Error('Error desconocido en la comunicación con la IA.');
+}
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url || '', `http://${req.headers.host}`);
 
@@ -16,23 +41,17 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const { message } = JSON.parse(body);
+        const promptText = `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde de manera clara y directa a la siguiente consulta del usuario: ${message}`;
         
-        // Llamada usando el modelo gemini-3.8-flash requerido por la API actual
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: [
-            { role: 'user', parts: [{ text: `Actúa como un Agente de Registro de Contratos profesional para Periferia IT Group. Responde de manera clara y directa a la siguiente consulta del usuario: ${message}` }] }
-          ]
-        });
-
-        const replyText = response.text || 'No se obtuvo respuesta del modelo.';
+        // Llamada protegida con reintentos automáticos exponenciales
+        const replyText = await generateWithBackoff(promptText);
 
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ reply: replyText }));
       } catch (error: any) {
-        console.error('Error detallado de Gemini:', error);
+        console.error('Error detallado:', error);
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'Error al comunicarse con la IA: ' + (error.message || 'Desconocido') }));
+        res.end(JSON.stringify({ error: error.message || 'Error al procesar la solicitud' }));
       }
     });
     return;
